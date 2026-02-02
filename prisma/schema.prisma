@@ -1,0 +1,108 @@
+// 1. Configuración del Cliente y Base de Datos
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// ==========================================
+// MODELO 1: EMPLEADOS (Catálogo de RRHH)
+// ==========================================
+model Employee {
+  // Usamos el número de empleado real como ID (ej: "109823")
+  numero_empleado String  @id
+  
+  nombre_completo String
+  puesto          String?
+  centro_costos   String? // Clave para reportes financieros
+  ubicacion       String? // Tienda, Distrito o Región
+  email           String? @unique
+  
+  // Estatus en la empresa (no en el sistema ITAM)
+  estatus_rh      String  @default("ACTIVO") // "ACTIVO", "BAJA", "LICENCIA"
+  
+  // Relación: Un empleado puede tener múltiples asignaciones históricas o actuales
+  // (Ej: Celular + Tablet + Hotspot)
+  slots_asignados ServiceSlot[]
+
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+}
+
+// ==========================================
+// MODELO 2: SERVICE SLOT (La "Verdad Única")
+// ==========================================
+// Esta tabla une la Línea (Telcel) con el Equipo (Hardware) en una sola entidad lógica.
+model ServiceSlot {
+  // ID MAESTRO: Inmutable. No cambia si se rompe el celular o cambia el empleado.
+  id              String   @id @default(uuid()) 
+
+  // --- RELACIÓN DE ASIGNACIÓN ---
+  // El slot puede estar vacante (employee_id nulo) si está en bodega
+  employee_id     String?
+  empleado        Employee? @relation(fields: [employee_id], references: [numero_empleado])
+
+  // --- DATOS DEL HARDWARE (Mutable - Vienen de Inventario/MDM) ---
+  imei            String?   @unique // Puede ser nulo si es solo un chip sin equipo
+  marca           String?   // Ej: Apple, Samsung
+  modelo          String?   // Ej: iPhone 13 128GB
+  numero_serie    String?   // Serial del fabricante
+  
+  // Datos de MDM (Workspace One)
+  mdm_last_seen   DateTime? // Última conexión reportada
+  mdm_compliance  String?   // "Compliant", "Non-Compliant"
+  mdm_status      String?   // Estado en consola
+
+  // --- DATOS DE LA LÍNEA (Mutable - Vienen de Telcel) ---
+  telefono        String?   @unique // El número a 10 dígitos
+  sim_card        String?   // ICCID
+  plan_telcel     String?   // Nombre del plan contratado
+  renta_mensual   Float?    // Costo base sin IVA
+  
+  // --- FECHAS CRÍTICAS (Para Alertas y Renovaciones) ---
+  fecha_asignacion DateTime? @default(now())
+  fecha_inicio_plan DateTime?
+  fecha_fin_plan    DateTime? // <-- CAMPO CLAVE PARA TU DASHBOARD DE RENOVACIONES
+
+  // --- ESTADO DEL ACTIVO ---
+  // ASIGNADO: Tiene empleado y funciona.
+  // DISPONIBLE: En bodega, listo para usarse.
+  // MANTENIMIENTO: En reparación.
+  // BAJA_PENDIENTE: Se va a desechar.
+  // ROBADO: Reportado como siniestro.
+  estatus         String    @default("DISPONIBLE")
+
+  // Comentarios libres para casos raros
+  notas           String?
+
+  // Relación con el historial
+  logs            AuditLog[]
+
+  updated_at      DateTime @updatedAt
+}
+
+// ==========================================
+// MODELO 3: AUDITORÍA (Historial Automático)
+// ==========================================
+// Cada vez que algo cambie en ServiceSlot, insertamos aquí.
+model AuditLog {
+  id              Int      @id @default(autoincrement())
+  
+  fecha           DateTime @default(now())
+  
+  // Relación: A qué activo afectó el cambio
+  slot_id         String
+  slot            ServiceSlot @relation(fields: [slot_id], references: [id])
+  
+  // Detalles del evento
+  accion          String   // "CREACION", "ASIGNACION", "CARGA_MASIVA", "API_UPDATE"
+  campo_afectado  String?  // Ej: "fecha_fin_plan", "imei"
+  valor_anterior  String?  // Lo que había antes (convertido a texto)
+  valor_nuevo     String?  // Lo que hay ahora
+  
+  usuario_responsable String? // "Admin", "Sistema", "Carga_CSV"
+  motivo          String?  // "Renovación", "Robo", "Corrección de datos"
+}
